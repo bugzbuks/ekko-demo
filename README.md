@@ -56,13 +56,34 @@ echo "API_KEY=demo1234567890" >> .env
 #    • Uses real AWS DynamoDB or local stub if configured
 ```
 
-### Seed Root Admin User
+## Local Development Setup (Docker + DynamoDB)
 
-To bootstrap the system with a **root admin** account, run the minimal seed script:
+### Prerequisites
+
+* Docker installed and running
+* Node.js (v20+ recommended)
+* AWS CLI (configured)
+
+### Step 1: Start DynamoDB Local via Docker
 
 ```bash
+docker run -p 8000:8000 --name ekko-dynamodb amazon/dynamodb-local -jar DynamoDBLocal.jar -sharedDb
+```
+
+You can confirm it is running with:
+
+```bash
+curl http://localhost:8000/shell/
+```
+NOTE: If it's working, you’ll receive an authentication error (expected), which means the server is responding.
+
+### Step 2: Create Tables
 cd backend
 npx ts-node scripts/seed.ts
+
+Check if the tables are created
+```bash
+aws dynamodb list-tables --endpoint-url http://localhost:8000
 ```
 
 ### API Endpoints
