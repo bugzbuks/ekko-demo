@@ -1,0 +1,8 @@
+/* stylelint-disable at-rule-no-unknown */
+/* postcss-disable */
+/* tailwindcss-disable */
+
+/* Tailwind base, components, utilities */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

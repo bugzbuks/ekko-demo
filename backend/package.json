@@ -1,0 +1,29 @@
+{
+  "name": "ekko-backend",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "deploy": "serverless deploy",
+    "dev": "serverless offline start --stage dev",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.535.0",
+    "@aws-sdk/client-dynamodb": "^3.535.0",
+    "@aws-sdk/lib-dynamodb": "^3.535.0",
+    "@types/aws-lambda": "^8.10.140",
+    "@types/aws-sdk": "^2.7.0",
+    "@types/node": "^20.14.6",
+    "ekko-backend": "file:"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.9",
+    "serverless": "3.39",
+    "serverless-dotenv-plugin": "^6.0.0",
+    "serverless-esbuild": "^1.52.1",
+    "serverless-lift": "^1.28.1",
+    "serverless-offline": "^13.6.0",
+    "serverless-prune-plugin": "^2.0.2",
+    "typescript": "^5.4.4"
+  }
+}

@@ -1,0 +1,139 @@
+service: ekko-backend
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  region: af-south-1
+  runtime: nodejs20.x
+  stage: ${opt:stage, 'dev'}
+  environment:
+    STAGE: ${self:provider.stage}
+    USERS_TABLE: ${self:provider.stage}-users
+    ROLES_TABLE: ${self:provider.stage}-roles
+    COGNITO_USER_POOL_ID: af-south-1_qvirSXTxw
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:Query
+            - dynamodb:UpdateItem
+            - cognito-idp:AdminCreateUser
+            - cognito-idp:AdminGetUser
+          Resource: '*'
+
+plugins:
+  - serverless-esbuild
+  - serverless-dotenv-plugin
+  - serverless-offline
+  - serverless-prune-plugin
+  - serverless-lift
+
+custom:
+  dotenv:
+    required:
+      - COGNITO_USER_POOL_ID
+  esbuild:
+    bundle: true
+    target: 'node20'
+    platform: 'node'
+    sourcemap: inline
+  prune:
+    automatic: true
+    number: 3
+  dynamodb:
+    stages:
+      - dev
+    start:
+      port: 8000
+      inMemory: true
+      migrate: true
+
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        AttributeDefinitions:
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: email
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+
+    RolesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ROLES_TABLE}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: parentId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: ParentIndex
+            KeySchema:
+              - AttributeName: parentId
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        BillingMode: PAY_PER_REQUEST
+
+functions:
+  preTokenLambda:
+    handler: src/handlers/auth/preTokenHandler.handler
+    events:
+      - cognitoUserPool:
+          pool: af-south-1_qvirSXTxw
+          trigger: PreTokenGeneration
+          existing: true
+
+  registerUser:
+    handler: src/handlers/auth/registerUser.handler
+    events:
+      - http:
+          path: auth/register
+          method: post
+
+  createUser:
+    handler: src/handlers/users/createUser.handler
+    events:
+      - http:
+          path: users
+          method: post
+
+  createRole:
+    handler: src/handlers/roles/createRole.handler
+    events:
+      - http:
+          path: roles
+          method: post
+
+  getAssignableRoles:
+    handler: src/handlers/roles/getAssignableRoles.handler
+    events:
+      - http:
+          path: roles/assignable
+          method: get
+
+  getUsers:
+    handler: src/handlers/users/getUsers.handler
+    events:
+      - http:
+          path: users
+          method: get
+
+  summary:
+    handler: src/handlers/summary.handler
+    events:
+      - http:
+          path: summary
+          method: get
+          cors: true          
