@@ -3,9 +3,6 @@ import { APIGatewayProxyHandler, APIGatewayProxyResult } from 'aws-lambda';
 import { ScanCommand, ScanCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ddb, queryRolesByParent } from '../../lib/dynamo';
 import { getCallerDetails } from '../../lib/authUtils'; // Import the helper
-// Note: jwt-decode is only needed if decoding token *within* this handler,
-// which is now handled by getCallerDetails. Keep if needed elsewhere.
-// import { jwtDecode } from 'jwt-decode';
 
 // USERS_TABLE defined in serverless.yml under provider.environment
 const USERS_TABLE = process.env.USERS_TABLE!;
@@ -22,7 +19,8 @@ const respond = (statusCode: number, payload: any): APIGatewayProxyResult => ({
 });
 
 /**
- * Handler to list users accessible to the caller with pagination.
+ * Handler to list users accessible to the caller with pagination,
+ * EXCLUDING the caller themselves.
  * Handles both real Cognito JWTs (production) and dummy JWTs (local).
  *
  * Query parameters:
@@ -33,9 +31,9 @@ export const handler: APIGatewayProxyHandler = async (event) => {
   try {
     // --- Determine Caller Identity and Roles ---
     const caller = getCallerDetails(event);
-    if (!caller.isAuthenticated) {
-        // If authentication details couldn't be determined, deny access.
-        return respond(401, { error: caller.error || 'Unauthorized' });
+    if (!caller.isAuthenticated || !caller.email) { // Ensure we have caller email for filtering
+        console.warn("[getUsers] Could not determine authenticated caller's email.");
+        return respond(401, { error: caller.error || 'Unauthorized or missing email claim' });
     }
     const { roles: callerRoles, isRootAdmin: isCallerRootAdmin, email: callerEmail } = caller;
     console.log(`[getUsers] Caller: ${callerEmail}, IsRoot: ${isCallerRootAdmin}, Roles: ${JSON.stringify(callerRoles)}`);
@@ -44,7 +42,10 @@ export const handler: APIGatewayProxyHandler = async (event) => {
 
     // --- Pagination Parameters ---
     const qs = event.queryStringParameters || {};
-    const limit = qs.limit ? parseInt(qs.limit, 10) : 50;
+    // Adjust limit slightly higher internally to account for filtering self out later
+    // This helps ensure a page isn't unexpectedly small if the caller is on it.
+    const requestedLimit = qs.limit ? parseInt(qs.limit, 10) : 50;
+    const internalLimit = requestedLimit + 1; // Fetch one extra item potentially
     let exclusiveStartKey: Record<string, any> | undefined;
     if (qs.lastKey) {
       try {
@@ -65,27 +66,24 @@ export const handler: APIGatewayProxyHandler = async (event) => {
        console.log("[getUsers] Root admin detected. Scanning all users.");
       params = {
         TableName: USERS_TABLE,
-        Limit: limit,
+        Limit: internalLimit, // Use internal limit
         ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
       };
     } else {
       // Non-root admin: Find accessible roles and build filter
       console.log("[getUsers] Non-root admin. Calculating accessible roles.");
-      // Build full downstream set of role IDs the caller can access
       const accessibleRoles = new Set<string>();
       const visited = new Set<string>();
 
-      const buildAccessible = async (roleId: string | null) => { // Allow null for top-level roles if applicable
-          // Skip if roleId is falsy (null, undefined, empty string) or already visited
+      const buildAccessible = async (roleId: string | null) => {
           if (!roleId || visited.has(roleId)) return;
           visited.add(roleId);
-          accessibleRoles.add(roleId); // User can access users with their *own* roles too
+          accessibleRoles.add(roleId);
           const children = await queryRolesByParent(roleId);
           for (const child of children) {
-              await buildAccessible(child.id); // Recurse
+              await buildAccessible(child.id);
           }
       };
-      // Start building from each role the user is directly assigned
       for (const rid of callerRoles) {
           await buildAccessible(rid);
       }
@@ -93,26 +91,20 @@ export const handler: APIGatewayProxyHandler = async (event) => {
       const accessibleRoleIds = Array.from(accessibleRoles);
       console.log(`[getUsers] Accessible Role IDs: ${JSON.stringify(accessibleRoleIds)}`);
 
-      // *** FIX: Check if accessibleRoleIds is empty ***
       if (accessibleRoleIds.length === 0) {
-          // If the user has no roles or their roles grant access to no downstream roles,
-          // they can see no users (based on role filtering). Return empty list immediately.
           console.log("[getUsers] No accessible roles found for user. Returning empty list.");
-          executeScan = false; // Set flag to skip scan
-          // We'll return the empty list after the 'if (executeScan)' block
+          executeScan = false;
       } else {
-          // --- IMPORTANT: SCALABILITY TODO ---
-          // The following Scan + Filter is INEFFICIENT for large tables.
-          // TODO: Replace this with an efficient Query strategy (e.g., path denormalization + GSI).
           console.warn("[getUsers] WARNING: Using inefficient Scan + Filter operation. Needs optimization for scale.");
-          // --- END SCALABILITY TODO ---
 
           // Build DynamoDB Scan filter for roles containment
           const filterParts: string[] = [];
           const eav: Record<string, any> = {}; // ExpressionAttributeValues
+          const ean: Record<string, string> = { '#rolesAttr': 'roles' }; // Placeholder for reserved keyword
+
           accessibleRoleIds.forEach((rid, idx) => {
             const key = `:r${idx}`;
-            filterParts.push(`contains(roles, ${key})`); // Check if 'roles' list contains the role ID
+            filterParts.push(`contains(#rolesAttr, ${key})`);
             eav[key] = rid;
           });
           const filterExp = filterParts.join(' OR ');
@@ -120,8 +112,9 @@ export const handler: APIGatewayProxyHandler = async (event) => {
           params = {
             TableName: USERS_TABLE,
             FilterExpression: filterExp,
-            ExpressionAttributeValues: eav, // eav will not be empty here because accessibleRoleIds is not empty
-            Limit: limit,
+            ExpressionAttributeValues: eav,
+            ExpressionAttributeNames: ean,
+            Limit: internalLimit, // Use internal limit
             ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
           };
       }
@@ -135,19 +128,52 @@ export const handler: APIGatewayProxyHandler = async (event) => {
 
     if (executeScan) {
         console.log("[getUsers] Executing DynamoDB Scan command with params:", JSON.stringify(params!));
-        const command = new ScanCommand(params!); // params will be defined if executeScan is true
+        const command = new ScanCommand(params!);
         const res = await ddb.send(command);
-        items = res.Items ?? [];
+        // *** FIX: Filter out the current caller from the results ***
+        items = (res.Items ?? []).filter(user => user.email !== callerEmail);
         lastEvaluatedKey = res.LastEvaluatedKey;
-        console.log(`[getUsers] Scan successful. Count: ${res.Count}, ScannedCount: ${res.ScannedCount}`);
+        console.log(`[getUsers] Scan successful. Fetched: ${res.Items?.length ?? 0}, Filtered (excluding self): ${items.length}, ScannedCount: ${res.ScannedCount}`);
+
+        // Adjust pagination if we filtered out the caller and now have fewer items than requested limit
+        // Note: This simple adjustment might still result in slightly uneven page sizes if the caller
+        // appears frequently in results near page boundaries. More complex pagination logic
+        // could re-fetch if needed, but this is often sufficient.
+        if (items.length > requestedLimit) {
+            // If we fetched extra and still have more than requested after filtering,
+            // keep the lastEvaluatedKey, but only return the requested number of items.
+            items = items.slice(0, requestedLimit);
+             console.log(`[getUsers] Sliced results to requested limit: ${requestedLimit}`);
+        } else if (items.length < requestedLimit && lastEvaluatedKey) {
+             // If we fetched extra, filtered out the caller, and now have *less* than requested,
+             // but there *was* a lastEvaluatedKey from the DB, we should still return that key
+             // so the frontend knows there *might* be more data, even if this page is short.
+             console.log(`[getUsers] Page is short after filtering self, but retaining lastEvaluatedKey.`);
+        } else if (items.length === requestedLimit && lastEvaluatedKey) {
+             // If we fetched extra, filtered out the caller, and now have *exactly* the requested limit,
+             // we still keep the lastEvaluatedKey.
+             console.log(`[getUsers] Page matches limit after filtering self, retaining lastEvaluatedKey.`);
+        } else {
+            // If the original scan didn't return a lastEvaluatedKey, or if we didn't fetch extra,
+            // then the lastEvaluatedKey remains as it was (likely undefined).
+             lastEvaluatedKey = res.LastEvaluatedKey; // Ensure it's correctly set from the response
+        }
+
+
+    } else {
+        // If scan was skipped (no accessible roles), items is already [] and lastKey is undefined
+        items = [];
+        lastEvaluatedKey = undefined;
     }
     // --- End Execute Scan ---
 
-    // Return the results (either from scan or the empty list if scan was skipped)
     return respond(200, { users: items, lastKey: lastEvaluatedKey });
 
   } catch (err: any) {
     console.error('[getUsers] Unhandled error:', err);
+    if (err.name === 'ValidationException') {
+         return respond(400, { error: `Invalid request: ${err.message}` });
+     }
     return respond(500, { error: 'Internal server error' });
   }
 };

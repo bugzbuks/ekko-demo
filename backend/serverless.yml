@@ -237,7 +237,17 @@ functions:
           cors: true
           # TODO: Uncomment and configure authorizer for deployed stages
           # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
-
+  getRole: # Function name
+      handler: src/handlers/roles/getRole.handler # Path to the handler file
+      memorySize: 128 # Optional: Adjust as needed
+      timeout: 10     # Optional: Adjust as needed
+      events:
+        - http:
+            path: roles/{id} # The URL path with ID parameter
+            method: get     # The HTTP method
+            cors: true      # Enable CORS if needed
+            # TODO: Uncomment and configure authorizer for deployed stages
+            # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }          
   updateRole: # New Function
     handler: src/handlers/roles/updateRole.handler
     memorySize: 128

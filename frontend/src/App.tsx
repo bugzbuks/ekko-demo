@@ -12,9 +12,11 @@ const DashboardPage = lazy(() => import('./pages/Dashboard'));
 const CreateRolePage = lazy(() => import('./pages/CreateRole'));
 const CreateUserPage = lazy(() => import('./pages/CreateUser'));
 const UsersListPage = lazy(() => import('./pages/UsersList'));
-// Define EditUserPage lazily (assuming you will create this file)
 const EditUserPage = lazy(() => import('./pages/EditUser'));
-// TODO: Add imports for EditRolePage, RolesListPage when created
+// Import new Role pages lazily
+const RolesListPage = lazy(() => import('./pages/RolesList'));
+const EditRolePage = lazy(() => import('./pages/EditRole'));
+
 
 // --- Loading Fallback ---
 function LoadingFallback() {
@@ -26,10 +28,10 @@ function LoadingFallback() {
 // Ensures only authenticated users can access certain routes
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { token } = useAuth(); // Get token from authentication context
-  console.log("ProtectedRoute Check: Token exists?", !!token); // Add log
+  // console.log("ProtectedRoute Check: Token exists?", !!token); // Keep for debugging if needed
   if (!token) {
     // If no token, redirect to the login page
-    console.log("ProtectedRoute Redirecting to /login");
+    // console.log("ProtectedRoute Redirecting to /login");
     return <Navigate to="/login" replace />;
   }
   // If token exists, render the child components
@@ -55,17 +57,36 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+        {/* --- Role Routes --- */}
         <Route
-          path="/roles" // Consider renaming to /roles/create or having a separate list page
+          path="/roles/create" // Specific path for creating roles
           element={
             <ProtectedRoute>
               <CreateRolePage />
             </ProtectedRoute>
           }
         />
-        {/* TODO: Add route for Roles List Page */}
-        {/* TODO: Add route for Edit Role Page (e.g., /roles/edit/:id) */}
+         <Route
+          path="/roles/edit/:id" // Path for editing a specific role
+          element={
+            <ProtectedRoute>
+              <EditRolePage />
+            </ProtectedRoute>
+          }
+        />
+         <Route
+          path="/roles" // Main path for listing roles
+          element={
+            <ProtectedRoute>
+              <RolesListPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* --- End Role Routes --- */}
 
+
+        {/* --- User Routes --- */}
         <Route
           path="/users/create"
           element={
@@ -75,7 +96,7 @@ export default function App() {
           }
         />
          <Route
-          path="/users/edit/:email" // NEW: Route for editing a specific user
+          path="/users/edit/:email"
           element={
             <ProtectedRoute>
               <EditUserPage />
@@ -90,6 +111,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+         {/* --- End User Routes --- */}
 
 
         {/* Root and catch-all redirection */}

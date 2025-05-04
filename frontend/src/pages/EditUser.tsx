@@ -36,8 +36,8 @@ import {
 } from "@/components/ui/select"; // Using Select for roles, though multi-select needs care
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
-import { toast } from '@/hooks/use-toast';
 
 // --- Interfaces ---
 // For data fetched about the user being edited
@@ -81,14 +81,26 @@ export default function EditUserPage() {
   const { data: userData, isLoading: isUserLoading, isError: isUserError, error: userError } = useQuery<UserDetails, Error>(
     ['userDetails', email], // Query key includes the email
     async () => {
+        console.log(`[EditUserPage] Fetching user details for: ${email}`);
         if (!email) throw new Error("User email not found in URL.");
-        const detailsUrl = `${import.meta.env.VITE_API_URL}/users/${encodeURIComponent(email)}/details`;
+
+        // Ensure VITE_API_URL is defined
+        const apiUrl = import.meta.env.VITE_API_URL;
+        if (!apiUrl) {
+            throw new Error("VITE_API_URL is not defined in environment variables.");
+        }
+
+        const detailsUrl = `${apiUrl}/users/${encodeURIComponent(email)}/details`;
         const res = await fetch(detailsUrl); // No auth needed for this specific helper endpoint
+        console.log(`[EditUserPage] Fetch response status for user details: ${res.status}`);
+
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
+             console.error(`[EditUserPage] Failed fetch user details response:`, errData);
             throw new Error(errData.error || `Failed to fetch user details (Status: ${res.status})`);
         }
         const data = await res.json();
+         console.log(`[EditUserPage] Received user details data:`, data);
         if (!data.found) {
             throw new Error(`User with email ${email} not found.`);
         }
@@ -99,6 +111,13 @@ export default function EditUserPage() {
         staleTime: 5 * 60 * 1000, // Cache data for 5 minutes
         cacheTime: 10 * 60 * 1000,
         retry: 1, // Retry once on error
+        onSuccess: (data) => {
+            // Added log on successful fetch
+            console.log("[EditUserPage] Successfully fetched user data:", data);
+        },
+        onError: (err) => {
+             console.error("[EditUserPage] Error fetching user data:", err);
+        }
     }
   );
 
@@ -106,20 +125,30 @@ export default function EditUserPage() {
   const { data: assignableRoles = [], isLoading: areRolesLoading, isError: areRolesError, error: rolesError } = useQuery<AssignableRole[], Error>(
     ['assignableRoles'],
     async () => {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/roles/assignable`, {
+       console.log("[EditUserPage] Fetching assignable roles...");
+       const apiUrl = import.meta.env.VITE_API_URL;
+       if (!apiUrl) throw new Error("VITE_API_URL is not defined.");
+
+       const res = await fetch(`${apiUrl}/roles/assignable`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+       console.log(`[EditUserPage] Fetch response status for assignable roles: ${res.status}`);
       if (!res.ok) {
          const errData = await res.json().catch(() => ({}));
+          console.error(`[EditUserPage] Failed fetch assignable roles response:`, errData);
          throw new Error(errData.error || 'Failed to load assignable roles');
       }
       const json = await res.json();
+       console.log("[EditUserPage] Received assignable roles:", json.roles);
       return json.roles as AssignableRole[];
     },
     {
         enabled: !!token, // Only run if logged in
         staleTime: 5 * 60 * 1000,
         cacheTime: 10 * 60 * 1000,
+         onError: (err) => {
+             console.error("[EditUserPage] Error fetching assignable roles:", err);
+        }
     }
   );
 
@@ -127,7 +156,10 @@ export default function EditUserPage() {
   const updateUserMutation = useMutation(
     async (data: { name: string; roles: string[] }) => {
         if (!email) throw new Error("Cannot update user without email.");
-        const updateUrl = `${import.meta.env.VITE_API_URL}/users/${encodeURIComponent(email)}`;
+         const apiUrl = import.meta.env.VITE_API_URL;
+         if (!apiUrl) throw new Error("VITE_API_URL is not defined.");
+
+        const updateUrl = `${apiUrl}/users/${encodeURIComponent(email)}`;
         const res = await fetch(updateUrl, {
             method: 'PUT',
             headers: {
@@ -148,10 +180,9 @@ export default function EditUserPage() {
                 title: "User Updated",
                 description: `User ${email} has been successfully updated.`,
             });
-            // Invalidate queries to refetch data
-            queryClient.invalidateQueries(['users']); // Invalidate list view
-            queryClient.invalidateQueries(['userDetails', email]); // Invalidate this user's details
-            navigate('/users'); // Navigate back to the user list
+            queryClient.invalidateQueries({ queryKey: ['users'] }); // Updated syntax for RQ v5+
+            queryClient.invalidateQueries({ queryKey: ['userDetails', email] }); // Updated syntax for RQ v5+
+            navigate('/users');
         },
         onError: (error: Error) => {
              toast({
@@ -174,30 +205,39 @@ export default function EditUserPage() {
 
   // Effect to populate form when user data loads
   useEffect(() => {
+    // Add log inside useEffect
+    console.log("[EditUserPage] useEffect triggered. userData:", userData);
     if (userData) {
-      form.reset({ // Use reset to update form values
-        name: userData.name,
-        roles: userData.roles, // Set initial roles for validation schema
-      });
-      setSelectedRoles(userData.roles || []); // Set state for multi-select UI
+        const resetValues = {
+            name: userData.name || '', // Ensure name is not undefined
+            roles: userData.roles || [], // Ensure roles is an array
+        };
+        console.log("[EditUserPage] Resetting form with values:", resetValues);
+      form.reset(resetValues);
+      // Also update the local state used for the multi-select UI
+      setSelectedRoles(userData.roles || []);
     }
-  }, [userData, form.reset]); // Depend on userData and form.reset
+  }, [userData, form.reset]); // Keep dependencies
 
   // Handle form submission
   const onSubmit = (data: FormInputs) => {
-    console.log("Submitting update:", { name: data.name, roles: selectedRoles });
+    console.log("[EditUserPage] Form submitted. RHF data:", data, "Selected Roles State:", selectedRoles);
     // Manually validate selectedRoles length before mutation
      if (selectedRoles.length === 0) {
          form.setError("roles", { type: "manual", message: "At least one role must be selected." });
          return; // Prevent submission
      }
+    // Mutate using the name from RHF data and roles from the component state
     updateUserMutation.mutate({ name: data.name, roles: selectedRoles });
   };
 
   // --- Render Logic ---
 
-  // Handle loading states for both queries
-  if (isUserLoading || areRolesLoading) {
+  // Combined loading state
+  const isLoading = isUserLoading || areRolesLoading;
+
+  // Handle loading states
+  if (isLoading) {
      return (
         <div className="p-4 md:p-6 max-w-xl mx-auto">
             <Card>
@@ -223,6 +263,7 @@ export default function EditUserPage() {
              <Alert variant="destructive">
                 <AlertTitle>Error Loading Data</AlertTitle>
                 <AlertDescription>
+                    {/* Display specific error first if available */}
                     {userError?.message || rolesError?.message || "Could not load necessary data to edit user."}
                 </AlertDescription>
                  <div className="mt-4">
@@ -237,15 +278,11 @@ export default function EditUserPage() {
 
   // Ensure userData exists before rendering form (should be covered by loading/error states)
   if (!userData) {
-      return <div className="p-4">User data is unavailable.</div>;
+      // This case should ideally not be reached if loading/error states are handled
+      return <div className="p-4">User data is unavailable after loading.</div>;
   }
 
   // --- Multi-select Role Handling ---
-  // Shadcn's default Select isn't multi-select. We need a custom implementation
-  // or a third-party library. For simplicity here, we'll use a basic HTML multi-select.
-  // For a better UX, consider libraries like 'react-select' or building a custom
-  // component using Shadcn's DropdownMenu or Command components.
-
   const handleRoleChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
       const options = event.target.options;
       const selected: string[] = [];
@@ -254,10 +291,14 @@ export default function EditUserPage() {
               selected.push(options[i].value);
           }
       }
+      console.log("[EditUserPage] Roles selection changed:", selected);
       setSelectedRoles(selected);
-       // Update form state for validation if needed, or rely on onSubmit validation
-      form.setValue("roles", selected, { shouldValidate: true }); // Trigger validation
-      form.clearErrors("roles"); // Clear error if selection is now valid
+      // Update form state for validation schema link
+      form.setValue("roles", selected, { shouldValidate: true });
+      // Clear validation error manually if selection becomes valid
+       if (selected.length > 0) {
+           form.clearErrors("roles");
+       }
   };
   // --- End Multi-select ---
 
@@ -275,22 +316,27 @@ export default function EditUserPage() {
                     <FormField
                         control={form.control}
                         name="name"
-                        render={({ field }) => (
-                        <FormItem>
-                            <FormLabel>Full Name</FormLabel>
-                            <FormControl>
-                            <Input placeholder="Jane Doe" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                        </FormItem>
-                        )}
+                        render={({ field }) => {
+                            // *** ADD THIS CONSOLE LOG ***
+                            console.log("[EditUserPage] Rendering Name field:", field);
+                            return (
+                                <FormItem>
+                                    <FormLabel>Full Name</FormLabel>
+                                    <FormControl>
+                                    {/* Ensure value is controlled */}
+                                    <Input placeholder="Jane Doe" {...field} value={field.value ?? ''} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            );
+                        }}
                     />
 
                     {/* Basic HTML Multi-Select for Roles */}
                     <FormField
                          control={form.control} // Registering with RHF for validation schema link
                          name="roles"
-                         render={({ field }) => ( // field isn't directly used for multi-select value/onChange
+                         render={({ field }) => ( // field isn't directly used for multi-select value/onChange here
                             <FormItem>
                                 <FormLabel>Assigned Roles</FormLabel>
                                 <FormControl>
@@ -299,7 +345,6 @@ export default function EditUserPage() {
                                          value={selectedRoles} // Control value with state
                                          onChange={handleRoleChange} // Use custom handler
                                          className="flex h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                                         // Apply Tailwind/Shadcn-like styles
                                      >
                                          {assignableRoles.map((role) => (
                                              <option key={role.id} value={role.id}>
@@ -311,7 +356,7 @@ export default function EditUserPage() {
                                 <FormDescription>
                                     Select one or more roles (Ctrl/Cmd + Click). Only roles you can manage are shown.
                                 </FormDescription>
-                                <FormMessage />
+                                <FormMessage /> {/* Shows validation error for roles */}
                             </FormItem>
                          )}
                     />

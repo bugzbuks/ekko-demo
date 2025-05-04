@@ -31,146 +31,135 @@ import {
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"; // Using Shadcn Select for parent role
+} from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { toast } from "@/components/ui/use-toast";
-import { Loader2 } from "lucide-react";
+import { toast } from '@/hooks/use-toast'; // Ensure correct path
+import { Loader2, ArrowLeft } from "lucide-react";
 
 // --- Constants ---
-const ROOT_ROLE_ID = "SYSTEM_ROOT"; // Should not be editable anyway, but good for checks
+const ROOT_ROLE_ID = "SYSTEM_ROOT";
 const TOP_LEVEL_PARENT_ID = "ROOT"; // Value representing top-level parent in DB
+const TOP_LEVEL_SENTINEL_VALUE = "__TOP_LEVEL__"; // Special value for the "Top Level" option in UI
 
 // --- Interfaces ---
-// For data fetched about the role being edited
 interface RoleDetails {
   id: string;
   name: string;
   roleType: string;
-  parentId: string | null; // Can be null from DB, map to TOP_LEVEL_PARENT_ID if needed
+  parentId: string | null;
 }
 
-// For the list of roles to populate parent dropdown
 interface RoleOption {
   id: string;
   roleType: string;
   name: string;
-  // Add parentId if needed for filtering/display, but backend currently sends all
 }
 
-// For form validation
+// --- Form Schema ---
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required." }),
   roleType: z.string().min(1, { message: "Role type is required." }),
-  parentId: z.string().optional(), // Parent ID from the select dropdown (value is string ID or empty string for 'ROOT')
+  // parentId now represents selected parent ID or the sentinel value
+  parentId: z.string().optional(),
 });
 
 type FormInputs = z.infer<typeof formSchema>;
 
 export default function EditRolePage() {
-  const { id: roleId } = useParams<{ id: string }>(); // Get role ID from URL param
+  const { id: roleId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { token } = useAuth();
   const queryClient = useQueryClient();
 
   // --- React Query Hooks ---
 
-  // 1. Fetch details of the role being edited
+  // 1. Fetch role details
   const { data: roleData, isLoading: isRoleLoading, isError: isRoleError, error: roleError } = useQuery<RoleDetails, Error>(
-    ['roleDetails', roleId], // Query key includes the role ID
+    ['roleDetails', roleId],
     async () => {
+        console.log(`[EditRolePage] Fetching role details for ID: ${roleId}`);
         if (!roleId) throw new Error("Role ID not found in URL.");
-        // Use the new GET /roles/{id} endpoint
-        const detailsUrl = `${import.meta.env.VITE_API_URL}/roles/${roleId}`;
-        const res = await fetch(detailsUrl, {
-             headers: { Authorization: `Bearer ${token}` }, // Endpoint is protected
-        });
+        const apiUrl = import.meta.env.VITE_API_URL;
+        if (!apiUrl) throw new Error("VITE_API_URL is not defined.");
+        const detailsUrl = `${apiUrl}/roles/${roleId}`;
+        const res = await fetch(detailsUrl, { headers: { Authorization: `Bearer ${token}` } });
+        console.log(`[EditRolePage] Fetch response status for role details: ${res.status}`);
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
+            console.error(`[EditRolePage] Failed fetch role details response:`, errData);
             throw new Error(errData.error || `Failed to fetch role details (Status: ${res.status})`);
         }
         const data = await res.json();
-        // The backend returns { role: RoleDetails }, extract the role object
-        if (!data.role) {
-             throw new Error(`Role with ID ${roleId} not found.`);
-        }
+        console.log(`[EditRolePage] Received role details data:`, data);
+        if (!data.role) throw new Error(`Role with ID ${roleId} not found.`);
         return data.role;
     },
-    {
-        enabled: !!roleId && !!token, // Only run query if ID and token exist
-        staleTime: 5 * 60 * 1000,
-        cacheTime: 10 * 60 * 1000,
-        retry: 1,
-    }
+    { enabled: !!roleId && !!token, staleTime: 5 * 60 * 1000, cacheTime: 10 * 60 * 1000, retry: 1 }
   );
 
-  // 2. Fetch ALL roles to populate the parent dropdown
-  // WARNING: Uses Scan on backend - may be slow if many roles exist
+  // 2. Fetch all roles for parent dropdown
   const { data: allRoles = [], isLoading: areRolesLoading, isError: areRolesError, error: rolesListError } = useQuery<RoleOption[], Error>(
-    ['allRoles'], // Separate query key for all roles
+    ['allRoles'],
     async () => {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/roles`, { // Use new GET /roles endpoint
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-         const errData = await res.json().catch(() => ({}));
-         throw new Error(errData.error || 'Failed to load roles list');
-      }
-      const json = await res.json();
-      return json.roles as RoleOption[];
+       console.log("[EditRolePage] Fetching all roles for parent dropdown...");
+       const apiUrl = import.meta.env.VITE_API_URL;
+       if (!apiUrl) throw new Error("VITE_API_URL is not defined.");
+       const res = await fetch(`${apiUrl}/roles`, { headers: { Authorization: `Bearer ${token}` } });
+       console.log(`[EditRolePage] Fetch response status for all roles: ${res.status}`);
+       if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          console.error(`[EditRolePage] Failed fetch all roles response:`, errData);
+          throw new Error(errData.error || 'Failed to load roles list');
+       }
+       const json = await res.json();
+       console.log("[EditRolePage] Received all roles:", json.roles);
+       return (json.roles as RoleOption[]).filter(role => role.id && role.id.trim() !== ''); // Pre-filter invalid IDs
     },
-    {
-        enabled: !!token,
-        staleTime: 15 * 60 * 1000, // Cache longer as roles might not change often
-        cacheTime: 30 * 60 * 1000,
-    }
+    { enabled: !!token, staleTime: 15 * 60 * 1000, cacheTime: 30 * 60 * 1000 }
   );
 
   // 3. Mutation hook for updating the role
   const updateRoleMutation = useMutation(
-    // Data includes name, roleType, and the *processed* parentId ('ROOT' or actual ID)
+    // Data now includes name, roleType, and the *processed* parentId (TOP_LEVEL_PARENT_ID or actual ID)
     async (data: { name: string; roleType: string; parentId: string }) => {
         if (!roleId) throw new Error("Cannot update role without ID.");
-        const updateUrl = `${import.meta.env.VITE_API_URL}/roles/${roleId}`;
+        const apiUrl = import.meta.env.VITE_API_URL;
+        if (!apiUrl) throw new Error("VITE_API_URL is not defined.");
+        const updateUrl = `${apiUrl}/roles/${roleId}`;
+        // Prepare payload: send null if parentId is TOP_LEVEL_PARENT_ID, otherwise send the ID string
         const payload = {
             name: data.name,
             roleType: data.roleType,
-            // Send null if parentId is 'ROOT', otherwise send the ID string
             parentId: data.parentId === TOP_LEVEL_PARENT_ID ? null : data.parentId
         };
+        console.log(`[EditRolePage] Sending PUT request to ${updateUrl} with payload:`, payload);
         const res = await fetch(updateUrl, {
             method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-            },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             body: JSON.stringify(payload),
         });
+        console.log(`[EditRolePage] PUT response status: ${res.status}`);
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
+            console.error(`[EditRolePage] Failed update role response:`, errData);
             throw new Error(errData.error || `Failed to update role (Status: ${res.status})`);
         }
         return res.json();
     },
     {
         onSuccess: (data) => {
-            toast({
-                title: "Role Updated",
-                description: `Role ${roleData?.name} has been successfully updated.`,
-            });
-            // Invalidate queries to refetch data
-            queryClient.invalidateQueries(['allRoles']); // Invalidate roles list
-            queryClient.invalidateQueries(['roleDetails', roleId]); // Invalidate this role's details
-            queryClient.invalidateQueries(['assignableRoles']); // Assignable roles might change
-            // TODO: Navigate back to a roles list page when it exists
-            navigate('/dashboard'); // Navigate back to dashboard for now
+             console.log("[EditRolePage] Update successful:", data);
+            toast({ title: "Role Updated", description: `Role ${roleData?.name} updated.` });
+            queryClient.invalidateQueries({ queryKey: ['allRoles'] });
+            queryClient.invalidateQueries({ queryKey: ['roleDetails', roleId] });
+            queryClient.invalidateQueries({ queryKey: ['assignableRoles'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboardSummary'] });
+            navigate('/roles');
         },
         onError: (error: Error) => {
-             toast({
-                variant: "destructive",
-                title: "Update Failed",
-                description: error.message || "An unknown error occurred.",
-            });
+             console.error("[EditRolePage] Update mutation error:", error);
+             toast({ variant: "destructive", title: "Update Failed", description: error.message });
         }
     }
   );
@@ -178,52 +167,41 @@ export default function EditRolePage() {
   // --- Form Setup ---
   const form = useForm<FormInputs>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      name: '',
-      roleType: '',
-      parentId: '', // Default to empty string, representing 'ROOT' selection
-    },
+    // Default parentId to the sentinel value if it should represent "Top Level" initially
+    defaultValues: { name: '', roleType: '', parentId: TOP_LEVEL_SENTINEL_VALUE },
   });
 
   // Effect to populate form when role data loads
   useEffect(() => {
+    console.log("[EditRolePage] useEffect triggered. roleData:", roleData);
     if (roleData) {
-      form.reset({
-        name: roleData.name,
-        roleType: roleData.roleType,
-        // Set parentId for the form. If DB has null/undefined, use empty string for 'ROOT' option.
-        // If DB has 'ROOT', use empty string. Otherwise use the ID.
-        parentId: (roleData.parentId === null || roleData.parentId === undefined || roleData.parentId === TOP_LEVEL_PARENT_ID) ? '' : roleData.parentId,
-      });
+      // Map null or 'ROOT' parentId from DB to the sentinel value for the form
+      const formParentId = (roleData.parentId === null || roleData.parentId === undefined || roleData.parentId === TOP_LEVEL_PARENT_ID)
+                           ? TOP_LEVEL_SENTINEL_VALUE
+                           : roleData.parentId;
+      const resetValues = { name: roleData.name || '', roleType: roleData.roleType || '', parentId: formParentId };
+      console.log("[EditRolePage] Resetting form with values:", resetValues);
+      form.reset(resetValues);
     }
   }, [roleData, form.reset]);
 
   // Handle form submission
   const onSubmit = (data: FormInputs) => {
-    // Process parentId: if empty string from form, use TOP_LEVEL_PARENT_ID ('ROOT')
-    const effectiveParentId = data.parentId === '' ? TOP_LEVEL_PARENT_ID : data.parentId!;
-    console.log("Submitting update:", { name: data.name, roleType: data.roleType, parentId: effectiveParentId });
-
-    // Prevent making role its own parent (double check)
+    // Convert the sentinel value back to the actual value needed by the backend ('ROOT')
+    const effectiveParentId = data.parentId === TOP_LEVEL_SENTINEL_VALUE ? TOP_LEVEL_PARENT_ID : data.parentId!;
+    console.log("[EditRolePage] Form submitted. RHF data:", data, "Effective ParentId for mutation:", effectiveParentId);
      if (roleId === effectiveParentId) {
          form.setError("parentId", { type: "manual", message: "A role cannot be its own parent." });
          return;
      }
-
-    updateRoleMutation.mutate({
-        name: data.name,
-        roleType: data.roleType,
-        parentId: effectiveParentId
-    });
+    // Mutate using the processed parentId ('ROOT' or actual ID)
+    updateRoleMutation.mutate({ name: data.name, roleType: data.roleType, parentId: effectiveParentId });
   };
 
   // --- Render Logic ---
-
-  // Combined loading state
   const isLoading = isRoleLoading || areRolesLoading;
 
-  // Handle loading states
-  if (isLoading) {
+  if (isLoading) { /* ... loading skeleton ... */
      return (
         <div className="p-4 md:p-6 max-w-xl mx-auto">
             <Card>
@@ -240,10 +218,8 @@ export default function EditRolePage() {
             </Card>
         </div>
      );
-  }
-
-  // Handle error states
-  if (isRoleError || areRolesError) {
+   }
+  if (isRoleError || areRolesError) { /* ... error alert ... */
      return (
         <div className="p-4 md:p-6 max-w-xl mx-auto">
              <Alert variant="destructive">
@@ -252,23 +228,20 @@ export default function EditRolePage() {
                     {roleError?.message || rolesListError?.message || "Could not load necessary data to edit role."}
                 </AlertDescription>
                  <div className="mt-4">
-                      {/* TODO: Link back to roles list page */}
                      <Button variant="outline" asChild>
-                         <Link to="/dashboard">Back to Dashboard</Link>
+                         <Link to="/roles">Back to Roles</Link>
                      </Button>
                  </div>
             </Alert>
         </div>
      );
-  }
-
-  // Ensure roleData exists before rendering form
-  if (!roleData) {
-      return <div className="p-4">Role data is unavailable.</div>;
+   }
+  if (!roleData) { /* ... no data message ... */
+      return <div className="p-4">Role data is unavailable after loading.</div>;
   }
 
   // Filter out the current role and the root role from the parent options
-  const parentRoleOptions = allRoles.filter(r => r.id !== roleId && r.id !== ROOT_ROLE_ID);
+  const validParentOptions = allRoles.filter(r => r.id !== roleId && r.id !== ROOT_ROLE_ID);
 
   return (
     <div className="p-4 md:p-6 max-w-xl mx-auto">
@@ -280,7 +253,7 @@ export default function EditRolePage() {
             <CardContent>
                 <Form {...form}>
                     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                    <FormField
+                    <FormField /* ... Name Field ... */
                         control={form.control}
                         name="name"
                         render={({ field }) => (
@@ -293,8 +266,7 @@ export default function EditRolePage() {
                         </FormItem>
                         )}
                     />
-
-                     <FormField
+                     <FormField /* ... RoleType Field ... */
                         control={form.control}
                         name="roleType"
                         render={({ field }) => (
@@ -310,24 +282,26 @@ export default function EditRolePage() {
                         </FormItem>
                         )}
                     />
-
-                    <FormField
+                    <FormField /* ... ParentId Field ... */
                         control={form.control}
                         name="parentId"
                         render={({ field }) => (
                             <FormItem>
                             <FormLabel>Parent Role</FormLabel>
-                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            {/* Use field.value which is controlled by form.reset/onChange */}
+                            {/* Ensure field.value is a string, default to sentinel if empty/null */}
+                            <Select onValueChange={field.onChange} value={field.value || TOP_LEVEL_SENTINEL_VALUE}>
                                 <FormControl>
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Select the parent role" />
+                                     {/* Placeholder is now less critical as we have an explicit item */}
+                                    <SelectValue placeholder="Select parent..." />
                                 </SelectTrigger>
                                 </FormControl>
                                 <SelectContent>
-                                 {/* Option for Top Level (ROOT) */}
-                                <SelectItem value="">— Top Level Role (No Parent) —</SelectItem>
-                                 {/* Filtered list of possible parents */}
-                                {parentRoleOptions.map((role) => (
+                                 {/* *** FIX: Use non-empty sentinel value for Top Level Item *** */}
+                                 <SelectItem value={TOP_LEVEL_SENTINEL_VALUE}>— Top Level Role (No Parent) —</SelectItem>
+                                 {/* Map over the actual valid parent options */}
+                                {validParentOptions.map((role) => (
                                     <SelectItem key={role.id} value={role.id}>
                                         {`${role.roleType} — ${role.name}`}
                                     </SelectItem>
@@ -343,7 +317,7 @@ export default function EditRolePage() {
                         />
 
                     {/* Display general mutation errors */}
-                    {updateRoleMutation.isError && (
+                    {updateRoleMutation.isError && ( /* ... error alert ... */
                             <Alert variant="destructive">
                                 <AlertTitle>Update Failed</AlertTitle>
                                 <AlertDescription>
@@ -353,8 +327,7 @@ export default function EditRolePage() {
                     )}
 
                     <div className="flex justify-end space-x-3 pt-4">
-                         {/* TODO: Link back to roles list page */}
-                         <Button variant="outline" type="button" onClick={() => navigate('/dashboard')} disabled={updateRoleMutation.isLoading}>
+                         <Button variant="outline" type="button" onClick={() => navigate('/roles')} disabled={updateRoleMutation.isLoading}>
                             Cancel
                          </Button>
                          <Button type="submit" disabled={updateRoleMutation.isLoading}>

@@ -20,7 +20,7 @@ const respond = (statusCode: number, payload: any): APIGatewayProxyResult => ({
 });
 
 /**
- * Lambda handler to get basic user details (roles, root status) by email.
+ * Lambda handler to get basic user details (name, roles, root status) by email.
  * INTENDED FOR LOCAL DEVELOPMENT LOGIN SIMULATION ONLY.
  * Does not require authentication.
  *
@@ -32,29 +32,28 @@ export const handler: APIGatewayProxyHandler = async (event) => {
         if (!targetEmail) {
             return respond(400, { error: 'User email required in path parameter' });
         }
-        // Decode email as API Gateway URL encodes path parameters
         const decodedEmail = decodeURIComponent(targetEmail);
         console.log(`[getUserDetails] Fetching details for: ${decodedEmail}`);
 
-        // Fetch user details using the helper function
         const user = await getUserByEmail(decodedEmail);
 
         if (!user) {
             console.log(`[getUserDetails] User not found: ${decodedEmail}`);
-            // Return a default structure indicating user not found,
-            // so the frontend can still generate a token for a non-existent user if needed.
+            // Return a default structure indicating user not found
             return respond(200, { // Return 200 OK but with data indicating not found
                 email: decodedEmail,
+                name: '', // Include name field even if empty
                 roles: [],
                 isRootAdmin: false,
                 found: false, // Add a flag
             });
         }
 
-        // User found, return their details
-        console.log(`[getUserDetails] Found user: ${decodedEmail}, Roles: ${JSON.stringify(user.roles)}, IsRoot: ${user.isRootAdmin}`);
+        // User found, return their details including the name
+        console.log(`[getUserDetails] Found user: ${decodedEmail}, Name: ${user.name}, Roles: ${JSON.stringify(user.roles)}, IsRoot: ${user.isRootAdmin}`);
         return respond(200, {
             email: user.email,
+            name: user.name || '', // *** ADDED user.name HERE *** (default to empty string if missing)
             roles: user.roles || [], // Ensure roles is always an array
             isRootAdmin: user.isRootAdmin || false, // Ensure boolean
             found: true,
