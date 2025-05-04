@@ -3,38 +3,64 @@ frameworkVersion: '3'
 
 provider:
   name: aws
-  region: af-south-1
+  region: af-south-1 # Or your preferred region
   runtime: nodejs20.x
   stage: ${opt:stage, 'dev'}
   environment:
     STAGE: ${self:provider.stage}
+    IS_OFFLINE: ${env:IS_OFFLINE, 'false'} # Set by serverless-offline
     USERS_TABLE: ${self:provider.stage}-users
     ROLES_TABLE: ${self:provider.stage}-roles
-    COGNITO_USER_POOL_ID: af-south-1_qvirSXTxw
+    COGNITO_USER_POOL_ID: af-south-1_qvirSXTxw # Replace if different
+    # API_KEY: set via .env file
+
   iam:
     role:
       statements:
         - Effect: Allow
           Action:
+            # DynamoDB Permissions
             - dynamodb:GetItem
             - dynamodb:PutItem
             - dynamodb:Query
+            - dynamodb:Scan
             - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - Fn::GetAtt: [UsersTable, Arn]
+            - Fn::GetAtt: [RolesTable, Arn]
+            - Fn::Join: ['/', [Fn::GetAtt: [RolesTable, Arn], 'index', 'ParentIndex']]
+        - Effect: Allow
+          Action:
+            # Cognito Permissions
             - cognito-idp:AdminCreateUser
             - cognito-idp:AdminGetUser
-          Resource: '*'
+            - cognito-idp:AdminSetUserPassword
+            - cognito-idp:AdminDeleteUser
+          Resource:
+            # Explicit YAML block notation for Fn::Join to avoid parsing issues
+            - Fn::Join:
+                - ':' # Delimiter
+                - - 'arn:aws:cognito-idp' 
+                  - Ref: AWS::Region      
+                  - Ref: AWS::AccountId    
+                  - Fn::Join:             
+                      - '/'
+                      - - 'userpool' 
+                        - ${self:provider.environment.COGNITO_USER_POOL_ID} 
 
 plugins:
   - serverless-esbuild
   - serverless-dotenv-plugin
   - serverless-offline
   - serverless-prune-plugin
-  - serverless-lift
+  # - serverless-lift
 
 custom:
   dotenv:
     required:
       - COGNITO_USER_POOL_ID
+      - API_KEY
   esbuild:
     bundle: true
     target: 'node20'
@@ -43,13 +69,8 @@ custom:
   prune:
     automatic: true
     number: 3
-  dynamodb:
-    stages:
-      - dev
-    start:
-      port: 8000
-      inMemory: true
-      migrate: true
+  # Define whether to use the authorizer based on stage (kept for reference)
+  # useAuthorizer: ${self:provider.stage != 'dev'}
 
 resources:
   Resources:
@@ -86,12 +107,43 @@ resources:
               ProjectionType: ALL
         BillingMode: PAY_PER_REQUEST
 
+    # --- API Gateway Authorizer Definition (Example) ---
+    # Define the Cognito Authorizer (kept for reference, but condition removed for now)
+    ApiGatewayAuthorizer:
+      Type: AWS::ApiGateway::Authorizer
+      # Condition: UseAuthorizerCondition # Condition temporarily removed
+      Properties:
+        Name: CognitoAuthorizer-${self:provider.stage}
+        Type: COGNITO_USER_POOLS
+        RestApiId:
+          Ref: ApiGatewayRestApi # Default API Gateway REST API
+        ProviderARNs:
+          - Fn::Join: # Use explicit notation here too for consistency
+              - ':'
+              - - 'arn:aws:cognito-idp'
+                - Ref: AWS::Region
+                - Ref: AWS::AccountId
+                - Fn::Join:
+                    - '/'
+                    - - 'userpool'
+                      - ${self:provider.environment.COGNITO_USER_POOL_ID}
+        IdentitySource: method.request.header.Authorization
+
+  # Define the condition for creating the authorizer (kept for reference)
+  # Conditions:
+  #    UseAuthorizerCondition:
+  #      Fn::Equals:
+  #        - true # Explicit boolean true
+  #        - ${self:custom.useAuthorizer} # Variable
+
+
 functions:
+  # --- Auth Handlers ---
   preTokenLambda:
     handler: src/handlers/auth/preTokenHandler.handler
     events:
       - cognitoUserPool:
-          pool: af-south-1_qvirSXTxw
+          pool: ${self:provider.environment.COGNITO_USER_POOL_ID}
           trigger: PreTokenGeneration
           existing: true
 
@@ -101,27 +153,19 @@ functions:
       - http:
           path: auth/register
           method: post
+          cors: true
+          # No authorizer needed
 
+  # --- User Handlers ---
   createUser:
     handler: src/handlers/users/createUser.handler
     events:
       - http:
           path: users
           method: post
-
-  createRole:
-    handler: src/handlers/roles/createRole.handler
-    events:
-      - http:
-          path: roles
-          method: post
-
-  getAssignableRoles:
-    handler: src/handlers/roles/getAssignableRoles.handler
-    events:
-      - http:
-          path: roles/assignable
-          method: get
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
 
   getUsers:
     handler: src/handlers/users/getUsers.handler
@@ -129,11 +173,101 @@ functions:
       - http:
           path: users
           method: get
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
 
+  updateUser: # New Function
+    handler: src/handlers/users/updateUser.handler
+    memorySize: 128
+    timeout: 30
+    events:
+      - http:
+          path: users/{email} # Use path parameter for email
+          method: put        # Use PUT for replace/update
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+
+  deleteUser:
+    handler: src/handlers/users/deleteUser.handler
+    events:
+      - http:
+          path: users/{email}
+          method: delete
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+
+  getUserDetails:
+    handler: src/handlers/users/getUserDetails.handler
+    events:
+      - http:
+          path: users/{email}/details
+          method: get
+          cors: true
+          # NO authorizer needed
+
+  # --- Role Handlers ---
+  createRole:
+    handler: src/handlers/roles/createRole.handler
+    events:
+      - http:
+          path: roles
+          method: post
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+
+  getAssignableRoles:
+    handler: src/handlers/roles/getAssignableRoles.handler
+    events:
+      - http:
+          path: roles/assignable
+          method: get
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+  getRoles:
+    handler: src/handlers/roles/getRoles.handler
+    events:
+      - http:
+          path: roles
+          method: get
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+
+  updateRole: # New Function
+    handler: src/handlers/roles/updateRole.handler
+    memorySize: 128
+    timeout: 30
+    events:
+      - http:
+          path: roles/{id} 
+          method: put     
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+
+  deleteRole:
+    handler: src/handlers/roles/deleteRole.handler
+    events:
+      - http:
+          path: roles/{id}
+          method: delete
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+
+  # --- Other Handlers ---
   summary:
     handler: src/handlers/summary.handler
     events:
       - http:
           path: summary
           method: get
-          cors: true          
+          cors: true
+          # TODO: Uncomment and configure authorizer for deployed stages
+          # authorizer: ${self:custom.useAuthorizer ? { authorizerId: { Ref: 'ApiGatewayAuthorizer' } } : null }
+

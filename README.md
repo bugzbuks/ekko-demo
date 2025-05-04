@@ -13,7 +13,9 @@ This project contains two parts:
 
 * **Node.js** v18 or higher
 * **NPM** (or Yarn)
+* **Docker Desktop** (for local development)
 * **AWS Credentials** (for deploying, not required for local development)
+* **AWS CLI** (optional, for manual interaction with local DynamoDB)
 
 ---
 
@@ -23,16 +25,15 @@ The backend reads the following from a `.env` file in `backend/` (demo only — 
 
 ```ini
 # backend/.env
-LOCAL=true                  # enable local stub mode
-API_KEY=<your-api-key>      # simple API key for registration endpoint
+LOCAL=true              # enable local stub mode
+API_KEY=<your-api-key>  # simple API key for registration endpoint
 ```
 
 The Cognito User Pool ID is configured directly in `serverless.yml`:
 
 ```yaml
-provider:
-  environment:
-    COGNITO_USER_POOL_ID: af-south-1_qvirSXTxw
+environment:
+  COGNITO_USER_POOL_ID: af-south-1_qvirSXTxw
 ```
 
 ---
@@ -51,79 +52,117 @@ npm install
 echo "LOCAL=true" > .env
 echo "API_KEY=demo1234567890" >> .env
 
-# 4. Start locally\ n npm run dev
-#    • Launches serverless-offline at http://localhost:3000
-#    • Uses real AWS DynamoDB or local stub if configured
+# 4. Start locally
+npm run dev
+# - Launches serverless-offline at http://localhost:3000
+# - Uses real AWS DynamoDB or local stub if configured
 ```
+
+---
 
 ## Local Development Setup (Docker + DynamoDB)
 
-### Prerequisites
-
-* Docker installed and running
-* Node.js (v20+ recommended)
-* AWS CLI (configured)
+This setup allows you to run the backend entirely offline, using a local DynamoDB instance managed by Docker.
 
 ### Step 1: Start DynamoDB Local via Docker
+
+Make sure Docker Desktop is running, then run:
 
 ```bash
 docker run -p 8000:8000 --name ekko-dynamodb amazon/dynamodb-local -jar DynamoDBLocal.jar -sharedDb
 ```
 
-You can confirm it is running with:
+Explanation:
+
+* `-p 8000:8000`: Maps port 8000 on your host to the container
+* `--name ekko-dynamodb`: Names the container
+* `-sharedDb`: Ensures a shared DB instance for all clients
+
+To verify:
 
 ```bash
-curl http://localhost:8000/shell/
-```
-NOTE: If it's working, you’ll receive an authentication error (expected), which means the server is responding.
-
-### Step 2: Create Tables
-cd backend
-npx ts-node scripts/seed.ts
-
-Check if the tables are created
-```bash
+curl http://localhost:8000
 aws dynamodb list-tables --endpoint-url http://localhost:8000
 ```
 
-### API Endpoints
+### Step 2: Seed Database (Create Table & User)
 
-| Method | Path                | Description                        |
-| ------ | ------------------- | ---------------------------------- |
-| POST   | `/roles`            | Create a new role in the hierarchy |
-| GET    | `/roles/assignable` | List roles current user can assign |
-| POST   | `/users`            | Pre-create an approved user        |
-| GET    | `/users`            | List accessible users              |
-| POST   | `/auth/register`    | Self-register approved user        |
+```bash
+cd backend
+npx ts-node scripts/seed.ts
+```
+
+What this does:
+
+* Creates the `dev-users` table if it doesn't exist
+* Inserts or updates a `root@system.app` user
+
+To verify:
+
+```bash
+aws dynamodb list-tables --endpoint-url http://localhost:8000
+aws dynamodb scan --table-name dev-users --endpoint-url http://localhost:8000
+```
+
+---
+
+## API Endpoints
+
+| Method | Path              | Description                        |
+| ------ | ----------------- | ---------------------------------- |
+| POST   | /roles            | Create a new role in the hierarchy |
+| GET    | /roles/assignable | List roles current user can assign |
+| POST   | /users            | Pre-create an approved user        |
+| GET    | /users            | List accessible users              |
+| POST   | /auth/register    | Self-register approved user        |
+| DELETE | /roles/{id}       | Self-register approved user        |
+| DELETE | /users/{email}    | Self-register approved user        |
 
 ---
 
 ## Frontend Quick Start (scaffold)
 
-> *Coming soon*: a React + Tailwind dashboard in `frontend/` to manage roles and users.
+Coming soon: a React + Tailwind dashboard in `frontend/` to manage roles and users.
 
 ```bash
 cd ekko-demo/frontend
 npm install
-npm start
+npm run dev
 ```
 
+Note, the default admin login created is root@system.app. During local mode the auth always passes. 
+This is because cognito cannot be simulated in offline mode.
 ---
 
 ## Notes
 
-* **API Key**: Include `x-api-key` header on requests to `/auth/register`.
-* **Cognito Integration**: Pre-token Lambda injects `custom:roles` and `custom:isRootAdmin` into JWT.
-* **Local Mode**: When `LOCAL=true`, Cognito calls are stubbed for fully offline use.
+* **API Key:** Include `x-api-key` header on requests to `/auth/register`
+* **Cognito Integration:** Pre-token Lambda injects `custom:roles` and `custom:isRootAdmin` into JWT
+* **Local Mode:** When `LOCAL=true`, Cognito calls are stubbed in `src/lib/cognito.ts`
+
+  * This stub assigns hardcoded `['Admin']` roles and skips pre-token logic
 
 ---
 
 ## Future Enhancements
 
-* Seed script for roles/users on deploy
-* Unit & integration tests (Vitest)
-* Complete frontend implementation
-* CI/CD pipeline with automated linting & testing
+* **Improve Query Scalability**
 
----
+  * Current `getUsers` and `summary` use inefficient `Scan` operations
+  * Add `path` to Role items and `hierarchyPath` to User items
+  * Create GSI on `UsersTable` using `hierarchyPath`
+  * Use `begins_with` in GSI Queries to get downstream users efficiently
+  * Handle users with roles in multiple branches
+  * Role Deletion Cleanup: The current deleteRole implementation only deletes the role item itself. It does not remove the deleted role ID from the roles array of users who were assigned that role. See "Future Enhancements".up
 
+* **Seed script** for roles/users on deploy
+
+* **Unit & integration tests** (Vitest)
+
+* **Complete frontend implementation**
+
+* **CI/CD pipeline** with linting & testing
+
+* **Implement missing Update/Delete operations** for Roles and Users
+
+* **Refine local Cognito stub** to simulate permission logic more accurately

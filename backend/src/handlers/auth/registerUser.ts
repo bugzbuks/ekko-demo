@@ -1,3 +1,4 @@
+// src/handlers/auth/registerUser.ts
 import { APIGatewayProxyHandler, APIGatewayProxyResult } from 'aws-lambda';
 import {
   CognitoIdentityProviderClient,

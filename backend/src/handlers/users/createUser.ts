@@ -1,16 +1,19 @@
 // src/handlers/users/createUser.ts
 import { APIGatewayProxyHandler, APIGatewayProxyResult } from 'aws-lambda';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb } from '../../lib/dynamo';
-import { queryRolesByParent } from '../../lib/dynamo';
+import { ddb, queryRolesByParent } from '../../lib/dynamo';
+import { getCallerDetails } from '../../lib/authUtils'; // Import the helper
 
-// Tables configured in serverless.yml
 const USERS_TABLE = process.env.USERS_TABLE!;
 
 // Helper for API responses
 const respond = (statusCode: number, payload: any): APIGatewayProxyResult => ({
-  statusCode,
-  body: JSON.stringify(payload),
+    statusCode,
+    headers: { // Add CORS headers
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Credentials': true,
+    },
+    body: JSON.stringify(payload),
 });
 
 /**
@@ -20,66 +23,95 @@ const respond = (statusCode: number, payload: any): APIGatewayProxyResult => ({
  */
 export const handler: APIGatewayProxyHandler = async (event) => {
   try {
-    // Extract Cognito custom claims
-    const claims = (event.requestContext.authorizer as any)?.claims;
-    const rolesJson = claims?.['custom:roles'] ?? '[]';
-    const isRootAdmin = claims?.['custom:isRootAdmin'] === 'true';
-    let callerRoles: string[];
-    try {
-      callerRoles = JSON.parse(rolesJson);
-    } catch {
-      return respond(400, { error: 'Invalid roles claim format' });
+    // --- Get Caller Details ---
+    const caller = getCallerDetails(event);
+    if (!caller.isAuthenticated) {
+        // Handle cases where authentication details couldn't be determined (e.g., missing token locally)
+        return respond(401, { error: caller.error || 'Unauthorized' });
     }
+    const { roles: callerRoles, isRootAdmin: isCallerRootAdmin } = caller;
+    console.log(`[createUser] Caller: ${caller.email}, IsRoot: ${isCallerRootAdmin}, Roles: ${JSON.stringify(callerRoles)}`);
+    // --- End Get Caller Details ---
+
 
     // Parse request body
     let body: any;
     try {
       body = JSON.parse(event.body || '{}');
     } catch {
-      return respond(400, { error: 'Invalid JSON' });
+      return respond(400, { error: 'Invalid JSON body' });
     }
-    const { email, name, roles } = body;
-    if (!email || !name || !Array.isArray(roles) || roles.length === 0) {
-      return respond(400, { error: 'email, name, and at least one role are required' });
+    const { email: targetEmail, name, roles: targetRoles } = body; // Renamed email to targetEmail for clarity
+
+    // Validate input payload
+    if (!targetEmail || !name || !Array.isArray(targetRoles) || targetRoles.some(r => typeof r !== 'string')) {
+      return respond(400, { error: 'email (string), name (string), and roles (string array) are required' });
+    }
+    if (targetRoles.length === 0) {
+        // Decide if creating users with no roles is allowed. Let's require at least one for now.
+         return respond(400, { error: 'At least one role must be assigned' });
     }
 
-    // Determine allowed role IDs for this caller
-    const allowed = new Set<string>();
-    if (!isRootAdmin) {
+
+    // --- Permission Check: Can caller assign these roles? ---
+    if (!isCallerRootAdmin) {
+      console.log(`[createUser] Non-root admin check. Caller roles: ${JSON.stringify(callerRoles)}, Target roles: ${JSON.stringify(targetRoles)}`);
+      // Determine roles assignable by the caller (downstream roles)
+      const assignableRoles = new Set<string>();
       const visited = new Set<string>();
-      const recurse = async (roleId: string) => {
-        if (visited.has(roleId)) return;
+      const buildAssignable = async (roleId: string) => {
+        if (!roleId || visited.has(roleId)) return;
         visited.add(roleId);
         const children = await queryRolesByParent(roleId);
         for (const child of children) {
-          allowed.add(child.id);
-          await recurse(child.id);
+          assignableRoles.add(child.id); // Add the child role ID
+          await buildAssignable(child.id); // Recurse
         }
       };
-      // Build allowed set from each of the caller's roles
       for (const rid of callerRoles) {
-        await recurse(rid);
+        // Decide if caller can assign their *own* roles. Let's assume yes for now.
+        // assignableRoles.add(rid); // Uncomment if needed
+        await buildAssignable(rid); // Find roles below the caller
       }
-      // Validate requested roles
-      for (const rid of roles) {
-        if (!allowed.has(rid)) {
-          return respond(403, { error: 'Cannot assign role outside your hierarchy' });
+
+      console.log(`[createUser] Caller can assign roles: ${JSON.stringify(Array.from(assignableRoles))}`);
+
+      // Validate that ALL requested target roles are within the assignable set
+      for (const requestedRole of targetRoles) {
+        if (!assignableRoles.has(requestedRole)) {
+           console.log(`[createUser] Permission denied: Caller cannot assign role ${requestedRole}.`);
+          return respond(403, { error: `Permission denied: Cannot assign role '${requestedRole}' outside your management hierarchy` });
         }
       }
+       console.log(`[createUser] Permission granted for non-root admin.`);
+    } else {
+         console.log(`[createUser] Permission granted: Caller is root admin.`);
     }
+    // --- End Permission Check ---
 
-    // Build user item
-    const userItem = { email, name, roles, isRootAdmin: false };
+
+    // Build user item for DynamoDB
+    // Ensure isRootAdmin for the *created* user is always false unless specifically intended
+    const userItem = {
+        email: targetEmail,
+        name,
+        roles: targetRoles,
+        isRootAdmin: false // Default new users to non-root
+    };
 
     // Save (upsert) into DynamoDB
+    console.log(`[createUser] Saving user item to ${process.env.USERS_TABLE}:`, userItem);
     await ddb.send(new PutCommand({
-      TableName: USERS_TABLE,
+      TableName: process.env.USERS_TABLE!,
       Item: userItem,
     }));
+     console.log(`[createUser] User ${targetEmail} saved successfully.`);
 
-    return respond(201, { message: 'User created/updated', user: userItem });
-  } catch (err) {
-    console.error('createUser error:', err);
-    return respond(500, { error: 'Internal server error' });
+    return respond(201, { message: 'User created/updated successfully', user: userItem });
+
+  } catch (err: any) {
+    console.error('[createUser] Unhandled error:', err);
+    return respond(500, { error: 'Internal server error during user creation' });
   }
 };
+

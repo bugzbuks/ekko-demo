@@ -14,10 +14,12 @@
     "@types/aws-lambda": "^8.10.140",
     "@types/aws-sdk": "^2.7.0",
     "@types/node": "^20.14.6",
-    "ekko-backend": "file:"
+    "ekko-backend": "file:",
+    "jwt-decode": "^4.0.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.9",
+    "@types/jwt-decode": "^3.1.0",
     "serverless": "3.39",
     "serverless-dotenv-plugin": "^6.0.0",
     "serverless-esbuild": "^1.52.1",

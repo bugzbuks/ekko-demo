@@ -1,4 +1,4 @@
-// src/lib/cognito.ts  – tiny helper
+// src/lib/cognito.ts
 import jwt from 'jsonwebtoken';
 import {
   CognitoIdentityProviderClient,
