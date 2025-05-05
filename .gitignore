@@ -130,4 +130,5 @@ dist
 demo-user_accessKeys.csv
 backend/.env
 frontend/.env
+backend/.esbuild/** */
 ekko FS Challenge.pdf

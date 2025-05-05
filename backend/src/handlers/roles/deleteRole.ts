@@ -1,9 +1,7 @@
 // src/handlers/roles/deleteRole.ts
 import { APIGatewayProxyHandler, APIGatewayProxyResult } from 'aws-lambda';
 import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
-// Assuming getRoleById and queryRolesByParent helpers exist in dynamo lib
 import { ddb, getRoleById, queryRolesByParent } from '../../lib/dynamo';
-// Import the authentication helper
 import { getCallerDetails } from '../../lib/authUtils';
 
 // Ensure ROLES_TABLE environment variable is set
@@ -19,7 +17,7 @@ const TOP_LEVEL_PARENT_ID = "ROOT"; // Value representing top-level parent in DB
 // Helper function for creating API Gateway responses
 const respond = (statusCode: number, payload: any): APIGatewayProxyResult => ({
     statusCode,
-    headers: { // Add CORS headers for consistency
+    headers: { 
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Credentials': true,
     },

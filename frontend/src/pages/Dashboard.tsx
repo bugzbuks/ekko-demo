@@ -12,7 +12,6 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator"; // Can be used if needed
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Users, UserPlus, Shield, ShieldPlus, LogOut, ArrowRight } from "lucide-react"; // Import icons
@@ -98,7 +97,7 @@ export default function DashboardPage() {
       return map;
   }, [allRolesData]); // Recompute only when allRolesData changes
 
-  // Combined loading state
+  // Combined loading state for initial display elements
   const isLoading = isSummaryLoading || areRolesLoading;
 
   return (
@@ -113,7 +112,7 @@ export default function DashboardPage() {
           </Button>
         </header>
 
-        {/* Display global loading error if roles fetch fails */}
+        {/* Display global loading error if roles fetch fails (critical for display) */}
         {areRolesError && (
              <Alert variant="destructive" className="mb-6">
                 <AlertTitle>Error Loading Role Data</AlertTitle>
@@ -151,7 +150,7 @@ export default function DashboardPage() {
               </CardContent>
               {/* User Count Footer */}
               <CardFooter className="text-sm text-muted-foreground pt-4 border-t">
-                 {isSummaryLoading ? (
+                 {isSummaryLoading ? ( // Use specific loading state
                      <Skeleton className="h-4 w-32" />
                  ) : isSummaryError ? (
                      <span className="text-destructive">Could not load user count.</span>
@@ -185,7 +184,7 @@ export default function DashboardPage() {
               </CardContent>
                {/* Role Count Footer */}
                <CardFooter className="text-sm text-muted-foreground pt-4 border-t">
-                  {isSummaryLoading ? (
+                  {isSummaryLoading ? ( // Use specific loading state
                      <Skeleton className="h-4 w-40" />
                   ) : isSummaryError ? (
                       <span className="text-destructive">Could not load role count.</span>
@@ -236,7 +235,7 @@ export default function DashboardPage() {
              </Card>
 
              {/* Display Summary Fetch Error if any */}
-             {isSummaryError && !isLoading && ( // Show only if not loading roles
+             {isSummaryError && !areRolesLoading && ( // Show only if not loading roles
                   <Alert variant="destructive">
                     <AlertTitle>Error Loading Summary</AlertTitle>
                     <AlertDescription>{(summaryError as Error)?.message || "Could not load dashboard summary data."}</AlertDescription>

@@ -130,7 +130,8 @@ npm install
 npm run dev
 ```
 
-Note, the default admin login created is root@system.app. During local mode the auth always passes. 
+Note, the default admin login created is *root@system.app*. 
+During local mode the auth always passes. 
 This is because cognito cannot be simulated in offline mode.
 ---
 

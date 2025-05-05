@@ -38,7 +38,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     const visited = new Set<string>(); // Keep track of visited roles to prevent infinite loops
 
     // Recursive function to find all roles downstream from a given role ID
-    const findDownstreamRoles = async (roleId: string | null) => { // Allow null for top-level start
+    const findDownstreamRoles = async (roleId: string | null) => { 
         // Base case: If roleId is null/undefined or already visited, stop recursion
         if (!roleId || visited.has(roleId)) return;
         visited.add(roleId);
