@@ -50,8 +50,16 @@ cd ekko-demo/backend
 npm install
 
 # 3. Create .env (demo-only)
-echo "LOCAL=true" > .env
-echo "API_KEY=demo1234567890" >> .env
+# backend/.env
+```ini 
+USERS_TABLE=dev-users
+ROLES_TABLE=dev-roles
+LOCAL=true
+DYNAMODB_ENDPOINT=http://localhost:8000
+AWS_ACCESS_KEY_ID=placeholder
+AWS_SECRET_ACCESS_KEY=placeholder
+API_KEY=demo1234567890
+```
 
 # 4. Start locally
 npm run dev
@@ -130,6 +138,14 @@ cd ekko-demo/frontend
 npm install
 npm run dev
 ```
+
+# frontend/.env
+```ini 
+VITE_API_URL=http://localhost:3000/dev
+VITE_IS_LOCAL_MODE=true
+VITE_API_KEY=demo1234567890
+```
+ENV and API keys: Note, ENV keys used for local development, the real keys will be stored in AWS Secrets Manager
 
 Note, the default admin login created is *root@system.app*. 
 During local mode the auth always passes. 
