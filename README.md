@@ -25,8 +25,9 @@ The backend reads the following from a `.env` file in `backend/` (demo only — 
 
 ```ini
 # backend/.env
-LOCAL=true              # enable local stub mode
-API_KEY=<your-api-key>  # simple API key for registration endpoint
+VITE_IS_LOCAL_MODE=true # enable local stub mode
+VITE_API_KEY=<your-api-key>  # simple API key for registration endpoint
+
 ```
 
 The Cognito User Pool ID is configured directly in `serverless.yml`:
